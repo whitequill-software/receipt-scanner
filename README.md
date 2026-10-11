@@ -1,60 +1,53 @@
-# Receipt Scanner MVP 🧾✨
+# Receipt Scanner
 
-An experimental receipt-scanning and receipt-database workflow for collecting receipt images, storing metadata, and preparing receipts for OCR/AI-assisted parsing.
+Turns receipt photos into structured spreadsheet rows. A receipt photo is uploaded through an AppSheet form, and a Google Apps Script reads it with Gemini vision and fills in the store name, date, total, and VAT automatically. No manual retyping.
 
-This MVP is part of a larger exploration into AI-powered document automation, expense tracking, and property/business record workflows.
+> Status: working MVP. v1 (Drive OCR) is the version currently deployed. v2 (Gemini vision) is built and being tested. Both are kept in this repo to show how the approach evolved.
 
----
+## How it works (v2, Gemini vision)
 
-## 🧠 Project Overview
+1. A receipt photo is uploaded through an AppSheet mobile form. The image is saved to Google Drive and a new row is added to the Google Sheet.
+2. A time-driven Apps Script trigger runs `scanReceiptImages()`.
+3. For each row that has an image but no RawText yet, the script finds the image in Drive and sends it to Gemini (`gemini-2.0-flash`) with a prompt asking for structured JSON.
+4. The script writes the store name, transaction date, total, and VAT into the sheet, and keeps Gemini's raw JSON response in the RawText column for debugging.
 
-**Goal:**  
-Turn messy, real-world receipt photos into clean, structured data you can use in apps, spreadsheets, or accounting tools.
+Design choices:
+- **Temperature 0 and JSON output**, so results are consistent and easy to parse.
+- **"Use null if unsure" in the prompt**, so the model leaves a field empty rather than guessing.
+- **Retry-safe**: if extraction fails, RawText stays empty and the row is picked up again on the next run.
+- **Capped at 5 receipts per run**, to protect API usage and Apps Script time limits.
 
-**Current focus:**
+## Versions
 
-- Mobile receipt upload through an AppSheet-style data-entry interface
-- Capturing receipt metadata such as:
-  - Receipt image
-  - Transaction date
-  - Store name
-  - Total amount
-- OCR extraction of printed text
-- First-pass parsing of key fields such as:
-  - Merchant / store name
-  - Date
-  - Total amount (Total / Total Due / Amount Due)
-  - Tax and subtotals, if available
+| Folder | Approach | Notes |
+|---|---|---|
+| `v1-drive-ocr/` | Google Drive OCR, then regex and keyword parsing | Includes fixes for OCR mistakes seen in real receipts (WAT to VAT, AMOUR to AMOUNT). Works, but breaks on unusual layouts. |
+| `v2-gemini-vision/` | Gemini reads the image and returns JSON | Replaces the brittle parsing with one model call. Newer version, being tested before it replaces v1. |
 
----
+## Sheet layout
 
-## ✅ Current MVP Status
+| Col | Field | Filled by |
+|---|---|---|
+| A | ID | AppSheet |
+| B | Date | AppSheet |
+| C | Receipt Image | AppSheet |
+| D | Transaction Date | Script |
+| E | Store Name | Script |
+| F | Total Amount | Script |
+| G | Tax / VAT | Script |
+| H | RawText (raw Gemini JSON) | Script |
+| I | UploadedBy | AppSheet |
 
-**What it can do today:**
+## Setup
 
-- Provide a mobile-friendly receipt entry form
-- Allow users to take a receipt photo or choose an existing image
-- Save receipt images and metadata into a receipt database workflow
-- Run OCR experiments to extract raw text from receipt images
-- Do a first-pass parse to:
-  - detect a probable **date**
-  - detect a probable **total** line, such as “TOTAL” or “AMOUNT DUE”
-- Print the extracted fields to the console and/or save as JSON during testing
+1. Create a Google Sheet with the columns above (the sheet tab named `Sheet1`).
+2. Open Extensions > Apps Script and paste in `v2-gemini-vision/Code.gs`.
+3. Replace `YOUR_SHEET_ID` at the top of the script with your spreadsheet ID.
+4. In Project Settings > Script Properties, add `GEMINI_API_KEY` with your Gemini API key. Never put the key in the code.
+5. Run `scanReceiptImages()` once manually and approve the permissions.
+6. Add a time-driven trigger for `scanReceiptImages` (for example every 5 minutes).
 
-**Known limitations / bugs from testing:**
-
-- Sometimes misreads the **date**
-- Often fails to read **“Total Due”** and its value, especially:
-  - when text uses colored backgrounds or yellow fonts
-  - when font is very small or low contrast
-- Layout-sensitive: cramped thermal receipts are still challenging
-- The mobile receipt-entry UI exists, but OCR/parsing automation is still being improved
-
-These limitations are expected at MVP stage and will guide the next iterations.
-
----
-
-## 📸 Screenshots
+## Screenshots
 
 ### Receipt Database Menu
 ![Receipt Database Menu](screenshots/app-menu.jpg)
@@ -68,49 +61,21 @@ These limitations are expected at MVP stage and will guide the next iterations.
 ### Receipt Image Uploaded
 ![Receipt Image Uploaded](screenshots/receipt-uploaded.jpg)
 
----
+## Known limitations
 
-## 🏗️ Architecture (MVP)
+- **Accuracy has not been formally measured.** [Fill in only if you tested: "Tested on N sample receipts, X of Y totals correct."]
+- **The Drive file is found by file name.** Duplicate file names could match the wrong image.
+- **The model name is hardcoded** (`GEMINI_MODEL`). Model versions get retired, so update it if calls start failing.
+- **The `confidence` field is requested but not used yet.** Flagging low-confidence rows for manual review is a planned improvement.
+- **Review results before using them for accounting.** AI can misread amounts on blurry or low-contrast receipts.
 
-High-level flow:
+## Roadmap
 
-1. **Mobile Receipt Entry**
-   - User opens the receipt database form
-   - User adds a receipt image by taking a photo or choosing from existing images
-   - User may enter or verify transaction date, store name, and total amount
+- Flag low-confidence rows with a "Needs Review" column.
+- Match images by Drive file ID instead of file name.
+- Measure accuracy on a labeled set of receipts.
+- Use as an intake layer for expense tracking and rental-billing automation.
 
-2. **Image Storage**
-   - Receipt image is stored for later review and processing
-   - Metadata is saved alongside the image
+## License
 
-3. **Preprocessing (optional / in progress)**
-   - Resize / deskew
-   - Grayscale and thresholding
-   - Contrast enhancement
-
-4. **OCR Engine**
-   - Runs OCR to convert image → raw text
-
-5. **Receipt Parser**
-   - Scans lines for:
-     - Date patterns, such as `YYYY-MM-DD`, `MM/DD/YYYY`, etc.
-     - Keyword patterns: `TOTAL`, `TOTAL DUE`, `AMOUNT DUE`, `CASH`, `CHANGE`, etc.
-
-6. **Output Layer**
-   - Structured result as Python dict/JSON, e.g.:
-
-   ```json
-   {
-     "merchant": "Sample Store",
-     "date": "2025-11-23",
-     "total": 524.75,
-     "currency": "PHP",
-     "raw_text": "..."
-   }
-   ```
-
----
-
-## 🌱 Larger Use Case
-
-This receipt scanner can become the intake layer for a larger rental billing or business-expense automation system. The mobile app captures receipt images and metadata, while OCR/AI parsing can later help reconcile payments, expenses, and records inside spreadsheets or databases.
+See `LICENSE.md`.
